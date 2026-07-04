@@ -1,0 +1,963 @@
+import React, { useState, useEffect, useCallback, useMemo } from "react";
+import {
+  Search,
+  Plus,
+  Edit3,
+  Trash2,
+  Users,
+  AlertCircle,
+  Loader2,
+  X,
+  Tag,
+  PackagePlus,
+  MapPin,
+  Mail,
+  Phone,
+  History,
+  Inbox,
+  ShoppingCart,
+  ChevronDown,
+  Building2,
+  TrendingUp,
+  Zap,
+  ArrowUpRight,
+  CheckCircle2,
+  Clock,
+  Send,
+} from "lucide-react";
+import { supabase } from "../lib/supabase";
+import { Link } from "react-router-dom";
+
+// --- Types ---
+interface Brand {
+  brand_id: string;
+  brands: { brand_name: string };
+}
+
+interface Supplier {
+  id: string;
+  supplier_name: string;
+  contact_person: string;
+  phone: string;
+  phone_name: string;
+  email: string;
+  address: string;
+  status: string;
+  total_stock: number;
+  total_damages: number;
+  supplier_brands: Brand[];
+  created_at: string;
+  brand_name?: string;
+}
+
+interface Product {
+  id: string;
+  product_name: string;
+  supplier_id?: string;
+}
+
+const INPUT_STYLE =
+  "w-full mt-1 bg-[#0d0d0d] border border-white/8 rounded-xl px-4 py-2.5 text-sm text-white focus:border-violet-500/60 outline-none transition-all focus:ring-2 focus:ring-violet-500/10 placeholder:text-white/20";
+
+const SELECT_STYLE =
+  "w-full mt-1 bg-[#0d0d0d] border border-white/8 rounded-xl px-4 py-2.5 text-sm text-white focus:border-violet-500/60 outline-none transition-all focus:ring-2 focus:ring-violet-500/10 cursor-pointer appearance-none";
+
+const Suppliers = () => {
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
+  const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
+  const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+  const [selectedSupplierId, setSelectedSupplierId] = useState<string>("");
+  const [restockSuccess, setRestockSuccess] = useState(false);
+
+  const [selectedYear, setSelectedYear] = useState(
+    new Date().getFullYear().toString()
+  );
+  const [selectedMonth, setSelectedMonth] = useState("all");
+
+  const years = useMemo(
+    () =>
+      Array.from({ length: 5 }, (_, i) =>
+        (new Date().getFullYear() - i).toString()
+      ),
+    []
+  );
+
+  const months = [
+    { val: "all", label: "All Months" },
+    { val: "0", label: "January" },
+    { val: "1", label: "February" },
+    { val: "2", label: "March" },
+    { val: "3", label: "April" },
+    { val: "4", label: "May" },
+    { val: "5", label: "June" },
+    { val: "6", label: "July" },
+    { val: "7", label: "August" },
+    { val: "8", label: "September" },
+    { val: "9", label: "October" },
+    { val: "10", label: "November" },
+    { val: "11", label: "December" },
+  ];
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [supRes, prodRes] = await Promise.all([
+        supabase
+          .from("suppliers")
+          .select(`*, supplier_brands (brand_id, brands (brand_name))`)
+          .order("created_at", { ascending: false }),
+        supabase.from("products").select("id, product_name, supplier_id"),
+      ]);
+
+      if (supRes.error) throw supRes.error;
+      if (prodRes.error) throw prodRes.error;
+
+      setSuppliers(supRes.data || []);
+      setProducts(prodRes.data || []);
+    } catch (error: any) {
+      console.error("Fetch Error:", error.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  const filteredSuppliers = useMemo(() => {
+    return suppliers.filter((s) => {
+      const date = new Date(s.created_at);
+      const matchesYear = date.getFullYear().toString() === selectedYear;
+      const matchesMonth =
+        selectedMonth === "all" || date.getMonth().toString() === selectedMonth;
+      const matchesSearch =
+        s.supplier_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        s.supplier_brands?.some((b) =>
+          b.brands.brand_name.toLowerCase().includes(searchTerm.toLowerCase())
+        );
+      return matchesYear && matchesMonth && matchesSearch;
+    });
+  }, [suppliers, selectedYear, selectedMonth, searchTerm]);
+
+  const stats = useMemo(
+    () => ({
+      totalStock: suppliers.reduce((a, b) => a + (b.total_stock || 0), 0),
+      totalDefects: suppliers.reduce((a, b) => a + (b.total_damages || 0), 0),
+    }),
+    [suppliers]
+  );
+
+  const handleSupplierSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const brandInput = (fd.get("brand_name") as string)?.trim().toUpperCase();
+
+    const payload = {
+      supplier_name: fd.get("supplier_name"),
+      contact_person: fd.get("contact_person"),
+      email: fd.get("email"),
+      phone: fd.get("phone"),
+      address: fd.get("address"),
+      status: "Active",
+      updated_at: new Date().toISOString(),
+    };
+
+    try {
+      let supplierId = editingSupplier?.id;
+
+      if (editingSupplier) {
+        const { error } = await supabase
+          .from("suppliers")
+          .update(payload)
+          .eq("id", supplierId);
+        if (error) throw error;
+      } else {
+        const { data, error } = await supabase
+          .from("suppliers")
+          .insert([payload])
+          .select()
+          .single();
+        if (error) throw error;
+        supplierId = data.id;
+      }
+
+      if (brandInput && supplierId) {
+        let { data: brandObj } = await supabase
+          .from("brands")
+          .select("id")
+          .ilike("brand_name", brandInput)
+          .maybeSingle();
+        let finalBrandId = brandObj?.id;
+
+        if (!finalBrandId) {
+          const { data: newB, error: bError } = await supabase
+            .from("brands")
+            .insert([{ brand_name: brandInput }])
+            .select()
+            .single();
+          if (bError) throw bError;
+          finalBrandId = newB.id;
+        }
+
+        await supabase
+          .from("supplier_brands")
+          .upsert(
+            { supplier_id: supplierId, brand_id: finalBrandId },
+            { onConflict: "supplier_id,brand_id" }
+          );
+      }
+
+      closeSupplierModal();
+      fetchData();
+    } catch (error: any) {
+      alert(`Error: ${error.message}`);
+    }
+  };
+
+  const handleRequestSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const selectedSup = suppliers.find((s) => s.id === selectedSupplierId);
+
+    const { error } = await supabase.from("product_resources").insert([
+      {
+        supplier_name: selectedSup?.supplier_name || "",
+        product_id: fd.get("product_id"),
+        purchase_price: parseFloat(fd.get("purchase_price") as string) || 0,
+        quantity: parseInt(fd.get("quantity") as string),
+        date_received: new Date().toISOString(),
+      },
+    ]);
+
+    if (error) {
+      alert(error.message);
+    } else {
+      setRestockSuccess(true);
+      setTimeout(() => {
+        setIsRequestModalOpen(false);
+        setSelectedSupplierId("");
+        setRestockSuccess(false);
+        fetchData();
+      }, 1500);
+    }
+  };
+
+  const deleteSupplier = async (id: string) => {
+    if (
+      window.confirm(
+        "Are you sure? This will remove the supplier and their brand links."
+      )
+    ) {
+      const { error } = await supabase.from("suppliers").delete().eq("id", id);
+      if (error) alert(error.message);
+      else fetchData();
+    }
+  };
+
+  const openRestockForSupplier = (supplierId: string) => {
+    setSelectedSupplierId(supplierId);
+    setIsRequestModalOpen(true);
+  };
+
+  const closeSupplierModal = () => {
+    setIsSupplierModalOpen(false);
+    setEditingSupplier(null);
+  };
+
+  return (
+    <>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap');
+
+        .suppliers-root {
+          font-family: 'DM Sans', sans-serif;
+          --accent: #7c3aed;
+          --accent-soft: rgba(124, 58, 237, 0.12);
+          --accent-border: rgba(124, 58, 237, 0.25);
+          --surface: #0a0a0b;
+          --surface-2: #111114;
+          --surface-3: #18181c;
+          --border: rgba(255,255,255,0.06);
+          --border-hover: rgba(255,255,255,0.12);
+          --text-1: #f4f4f5;
+          --text-2: #a1a1aa;
+          --text-3: #52525b;
+          --green: #22c55e;
+          --red: #ef4444;
+          --amber: #f59e0b;
+        }
+
+        .suppliers-root * { box-sizing: border-box; }
+
+        .font-display { font-family: 'Syne', sans-serif; }
+
+        .stat-card {
+          position: relative;
+          background: var(--surface-2);
+          border: 1px solid var(--border);
+          border-radius: 16px;
+          padding: 24px;
+          overflow: hidden;
+          transition: border-color 0.2s, transform 0.2s;
+          cursor: default;
+        }
+        .stat-card::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background: radial-gradient(circle at top right, var(--accent-soft) 0%, transparent 60%);
+          opacity: 0;
+          transition: opacity 0.3s;
+        }
+        .stat-card:hover { border-color: var(--accent-border); transform: translateY(-2px); }
+        .stat-card:hover::before { opacity: 1; }
+
+        .glow-btn {
+          position: relative;
+          overflow: hidden;
+          transition: all 0.2s;
+        }
+        .glow-btn::after {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, transparent 100%);
+          opacity: 0;
+          transition: opacity 0.2s;
+        }
+        .glow-btn:hover::after { opacity: 1; }
+
+        .table-row {
+          transition: background 0.15s;
+        }
+        .table-row:hover { background: rgba(255,255,255,0.015); }
+        .table-row:hover .row-actions { opacity: 1; }
+        .row-actions { opacity: 0; transition: opacity 0.15s; }
+
+        .restock-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          padding: 5px 12px;
+          border-radius: 8px;
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0.02em;
+          border: 1px solid var(--accent-border);
+          color: #a78bfa;
+          background: var(--accent-soft);
+          transition: all 0.2s;
+          cursor: pointer;
+          white-space: nowrap;
+        }
+        .restock-btn:hover {
+          background: rgba(124, 58, 237, 0.22);
+          border-color: rgba(124, 58, 237, 0.5);
+          color: #c4b5fd;
+          transform: translateY(-1px);
+          box-shadow: 0 4px 12px rgba(124, 58, 237, 0.2);
+        }
+
+        .modal-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 60;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(0,0,0,0.85);
+          backdrop-filter: blur(8px);
+          padding: 16px;
+          animation: fadeIn 0.15s ease;
+        }
+        .modal-panel {
+          background: var(--surface-2);
+          border: 1px solid rgba(255,255,255,0.08);
+          border-radius: 20px;
+          width: 100%;
+          box-shadow: 0 25px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.03);
+          animation: slideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+          overflow: hidden;
+        }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(16px) scale(0.98); } to { opacity: 1; transform: none; } }
+
+        .badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          padding: 3px 8px;
+          border-radius: 6px;
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+        }
+
+        .input-group { position: relative; }
+        .input-group .input-icon {
+          position: absolute;
+          left: 14px;
+          top: 50%;
+          transform: translateY(-50%);
+          color: var(--text-3);
+          pointer-events: none;
+          margin-top: 4px;
+        }
+        .input-group input, .input-group select { padding-left: 38px !important; }
+
+        .search-input-wrap { position: relative; }
+        .search-input-wrap svg {
+          position: absolute;
+          left: 14px;
+          top: 50%;
+          transform: translateY(-50%);
+          color: var(--text-3);
+          pointer-events: none;
+        }
+
+        .filter-select {
+          appearance: none;
+          background: var(--surface-2);
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          padding: 9px 36px 9px 14px;
+          font-size: 13px;
+          color: var(--text-2);
+          outline: none;
+          cursor: pointer;
+          font-family: 'DM Sans', sans-serif;
+          transition: border-color 0.2s;
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2352525b' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+          background-repeat: no-repeat;
+          background-position: right 12px center;
+        }
+        .filter-select:hover, .filter-select:focus { border-color: var(--border-hover); }
+
+        .success-check {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding: 48px;
+          gap: 12px;
+          animation: fadeIn 0.3s ease;
+        }
+
+        .section-label {
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          color: var(--text-3);
+          margin-bottom: 4px;
+        }
+
+        .divider {
+          height: 1px;
+          background: var(--border);
+          margin: 0;
+        }
+
+        .tag-dot {
+          width: 5px;
+          height: 5px;
+          border-radius: 50%;
+          background: currentColor;
+          opacity: 0.6;
+        }
+      `}</style>
+
+      <div className="suppliers-root p-6 max-w-screen-xl mx-auto min-h-screen">
+
+        {/* ── Header ── */}
+        <div className="flex flex-col md:flex-row md:items-start justify-between gap-6 mb-10">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <div className="w-1.5 h-1.5 rounded-full bg-violet-500 mt-0.5" />
+              <span className="text-[10px] font-bold tracking-[0.15em] uppercase" style={{ color: 'var(--text-3)' }}>
+                Supply Chain Management
+              </span>
+            </div>
+            <h1 className="font-display text-3xl font-bold text-white tracking-tight">
+              Vendors & Suppliers
+            </h1>
+            <p className="text-sm mt-1" style={{ color: 'var(--text-3)' }}>
+              {suppliers.length} active partners · Last synced just now
+            </p>
+          </div>
+          <div className="flex gap-3 items-center">
+            <button
+              onClick={() => setIsRequestModalOpen(true)}
+              className="glow-btn flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white/80 border"
+              style={{ background: 'var(--surface-3)', borderColor: 'var(--border-hover)' }}
+            >
+              <PackagePlus size={16} /> Log Incoming Stock
+            </button>
+            <button
+              onClick={() => setIsSupplierModalOpen(true)}
+              className="glow-btn flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-white"
+              style={{ background: 'linear-gradient(135deg, #7c3aed, #6d28d9)', boxShadow: '0 4px 20px rgba(124,58,237,0.35)' }}
+            >
+              <Plus size={16} /> Add Supplier
+            </button>
+          </div>
+        </div>
+
+        {/* ── Stats ── */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+          <div className="stat-card">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="section-label">Total Suppliers</p>
+                <h3 className="font-display text-4xl font-bold text-white mt-1">{suppliers.length}</h3>
+                <p className="text-xs mt-2" style={{ color: 'var(--text-3)' }}>Registered vendors</p>
+              </div>
+              <div className="p-2.5 rounded-xl" style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.15)' }}>
+                <Building2 size={18} className="text-blue-400" />
+              </div>
+            </div>
+            <div className="flex items-center gap-1 mt-4">
+              <ArrowUpRight size={12} className="text-green-400" />
+              <span className="text-xs text-green-400 font-medium">Active network</span>
+            </div>
+          </div>
+
+          <div className="stat-card">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="section-label">Total Units Sourced</p>
+                <h3 className="font-display text-4xl font-bold text-white mt-1">{stats.totalStock.toLocaleString()}</h3>
+                <p className="text-xs mt-2" style={{ color: 'var(--text-3)' }}>Lifetime received</p>
+              </div>
+              <div className="p-2.5 rounded-xl" style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.15)' }}>
+                <TrendingUp size={18} className="text-green-400" />
+              </div>
+            </div>
+            <div className="flex items-center gap-1 mt-4">
+              <Zap size={12} className="text-amber-400" />
+              <span className="text-xs font-medium" style={{ color: 'var(--text-3)' }}>All-time capacity</span>
+            </div>
+          </div>
+
+          <Link to="/admin/damages" className="block">
+            <div className="stat-card h-full">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="section-label">Reported Damages</p>
+                  <h3 className="font-display text-4xl font-bold text-white mt-1">{stats.totalDefects}</h3>
+                  <p className="text-xs mt-2" style={{ color: 'var(--text-3)' }}>View damage log →</p>
+                </div>
+                <div className="p-2.5 rounded-xl" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.15)' }}>
+                  <AlertCircle size={18} className="text-red-400" />
+                </div>
+              </div>
+              <div className="flex items-center gap-1 mt-4">
+                <div className="w-2 h-2 rounded-full" style={{ background: stats.totalDefects > 0 ? '#ef4444' : '#22c55e' }} />
+                <span className="text-xs font-medium" style={{ color: 'var(--text-3)' }}>
+                  {stats.totalDefects > 0 ? "Requires attention" : "All clear"}
+                </span>
+              </div>
+            </div>
+          </Link>
+        </div>
+
+        {/* ── Filters ── */}
+        <div className="flex flex-col md:flex-row gap-3 mb-5">
+          <div className="search-input-wrap flex-1 max-w-sm">
+            <Search size={15} />
+            <input
+              type="text"
+              placeholder="Search supplier or brand..."
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{
+                width: '100%',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border)',
+                borderRadius: '12px',
+                padding: '9px 14px 9px 40px',
+                fontSize: '13px',
+                color: 'white',
+                outline: 'none',
+                fontFamily: 'DM Sans, sans-serif',
+                transition: 'border-color 0.2s',
+              }}
+            />
+          </div>
+          <div className="flex gap-2 ml-auto">
+            <select
+              value={selectedYear}
+              onChange={(e) => setSelectedYear(e.target.value)}
+              className="filter-select"
+            >
+              {years.map((y) => <option key={y} value={y}>{y}</option>)}
+            </select>
+            <select
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              className="filter-select"
+            >
+              {months.map((m) => <option key={m.val} value={m.val}>{m.label}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {/* ── Table ── */}
+        <div className="rounded-2xl overflow-hidden" style={{ background: 'var(--surface-2)', border: '1px solid var(--border)', boxShadow: '0 4px 40px rgba(0,0,0,0.4)' }}>
+          {loading ? (
+            <div className="py-28 flex flex-col items-center gap-3">
+              <div className="relative">
+                <div className="w-10 h-10 rounded-full border-2 border-violet-500/20 border-t-violet-500 animate-spin" />
+              </div>
+              <span className="text-xs font-medium" style={{ color: 'var(--text-3)' }}>Syncing registry...</span>
+            </div>
+          ) : filteredSuppliers.length === 0 ? (
+            <div className="py-28 flex flex-col items-center gap-3" style={{ color: 'var(--text-3)' }}>
+              <Inbox size={36} strokeWidth={1} />
+              <p className="text-sm">No suppliers match your current filters.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.015)' }}>
+                    {["Company", "Brands", "Contact", "Damage Issues", ""].map((h) => (
+                      <th
+                        key={h}
+                        className="px-6 py-4 font-display text-[10px] font-bold uppercase tracking-[0.12em]"
+                        style={{ color: 'var(--text-3)' }}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredSuppliers.map((sup, idx) => (
+                    <tr
+                      key={sup.id}
+                      className="table-row"
+                      style={{ borderBottom: idx < filteredSuppliers.length - 1 ? '1px solid var(--border)' : 'none' }}
+                    >
+                      {/* Company */}
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <div
+                            className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 font-display font-bold text-xs"
+                            style={{ background: 'var(--accent-soft)', color: '#a78bfa', border: '1px solid var(--accent-border)' }}
+                          >
+                            {sup.supplier_name.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <div className="font-semibold text-sm text-white">{sup.supplier_name}</div>
+                            <div className="text-[10px] mt-0.5 flex items-center gap-1" style={{ color: 'var(--text-3)' }}>
+                              <Clock size={9} />
+                              Joined {new Date(sup.created_at).toLocaleDateString(undefined, { month: "short", year: "numeric" })}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Brands */}
+                      <td className="px-6 py-4">
+                        <div className="flex flex-wrap gap-1.5">
+                          {sup.supplier_brands?.map((b, i) => (
+                            <span key={i} className="badge" style={{ background: 'rgba(124,58,237,0.08)', color: '#a78bfa', border: '1px solid rgba(124,58,237,0.18)' }}>
+                              <div className="tag-dot" />
+                              {b.brands.brand_name}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+
+                      {/* Contact */}
+                      <td className="px-6 py-4">
+                        <div className="text-sm font-medium" style={{ color: 'var(--text-1)' }}>{sup.contact_person}</div>
+                        <div className="flex gap-3 mt-2">
+                          {[
+                            { Icon: Mail, title: sup.email },
+                            { Icon: Phone, title: sup.phone },
+                            { Icon: MapPin, title: sup.address },
+                          ].map(({ Icon, title }, i) => (
+                            <button
+                              key={i}
+                              title={title}
+                              className="p-1.5 rounded-lg transition-colors"
+                              style={{ color: 'var(--text-3)', background: 'transparent' }}
+                              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = 'white'; (e.currentTarget as HTMLElement).style.background = 'var(--surface-3)'; }}
+                              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = 'var(--text-3)'; (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                            >
+                              <Icon size={12} />
+                            </button>
+                          ))}
+                        </div>
+                      </td>
+
+                      {/* Damage */}
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-2">
+                          <div className={`w-1.5 h-1.5 rounded-full ${sup.total_damages > 0 ? 'bg-red-500' : 'bg-green-500'}`} />
+                          <span className={`text-sm font-mono font-bold ${sup.total_damages > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                            {sup.total_damages || 0}
+                          </span>
+                          {sup.total_damages > 0 && (
+                            <span className="text-[10px]" style={{ color: 'var(--text-3)' }}>units</span>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Actions */}
+                      <td className="px-6 py-4">
+                        <div className="row-actions flex items-center justify-end gap-2">
+                          {/* Restock Request Button */}
+                          <button
+                            onClick={() => openRestockForSupplier(sup.id)}
+                            className="restock-btn"
+                          >
+                            <ShoppingCart size={11} />
+                            Request Restock
+                          </button>
+
+                          <div className="w-px h-4 mx-1" style={{ background: 'var(--border)' }} />
+
+                          <button
+                            onClick={() => {
+                              setEditingSupplier({
+                                ...sup,
+                                brand_name: sup.supplier_brands?.[0]?.brands?.brand_name || "",
+                              });
+                              setIsSupplierModalOpen(true);
+                            }}
+                            className="p-2 rounded-lg transition-colors text-zinc-500 hover:text-white"
+                            style={{ background: 'transparent' }}
+                            onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--surface-3)'}
+                            onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
+                          >
+                            <Edit3 size={14} />
+                          </button>
+                          <button
+                            onClick={() => deleteSupplier(sup.id)}
+                            className="p-2 rounded-lg transition-colors text-zinc-500 hover:text-red-400"
+                            style={{ background: 'transparent' }}
+                            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(239,68,68,0.08)'; }}
+                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {/* Table Footer */}
+              <div className="px-6 py-3 flex items-center justify-between" style={{ borderTop: '1px solid var(--border)', background: 'rgba(255,255,255,0.01)' }}>
+                <span className="text-[11px]" style={{ color: 'var(--text-3)' }}>
+                  Showing {filteredSuppliers.length} of {suppliers.length} suppliers
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                  <span className="text-[11px]" style={{ color: 'var(--text-3)' }}>Live</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+
+        {/* ── Supplier Modal ── */}
+        {isSupplierModalOpen && (
+          <div className="modal-backdrop">
+            <div className="modal-panel" style={{ maxWidth: '540px' }}>
+              <div className="px-6 py-5 flex justify-between items-center" style={{ borderBottom: '1px solid var(--border)' }}>
+                <div>
+                  <h2 className="font-display font-bold text-white text-lg">
+                    {editingSupplier ? "Update Supplier" : "Register Supplier"}
+                  </h2>
+                  <p className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
+                    {editingSupplier ? "Edit vendor information" : "Add a new vendor to your network"}
+                  </p>
+                </div>
+                <button onClick={closeSupplierModal} className="p-2 rounded-lg transition-colors text-zinc-500 hover:text-white hover:bg-white/5">
+                  <X size={18} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSupplierSubmit} className="p-6 space-y-5">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2">
+                    <label className="section-label">Company Name</label>
+                    <input name="supplier_name" defaultValue={editingSupplier?.supplier_name} required placeholder="e.g. Acme Distributors Inc." className={INPUT_STYLE} />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="section-label" style={{ color: '#a78bfa' }}>Primary Brand</label>
+                    <input name="brand_name" defaultValue={editingSupplier?.brand_name} placeholder="SAMSUNG, APPLE, SONY…" className={INPUT_STYLE + " uppercase placeholder:normal-case"} />
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-3)' }}>Will be linked automatically to this supplier</p>
+                  </div>
+                  <div>
+                    <label className="section-label">Contact Person</label>
+                    <input name="contact_person" defaultValue={editingSupplier?.contact_person} required className={INPUT_STYLE} placeholder="Full name" />
+                  </div>
+                  <div>
+                    <label className="section-label">Phone Number</label>
+                    <input name="phone" defaultValue={editingSupplier?.phone} required className={INPUT_STYLE} placeholder="+63 912 345 6789" />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="section-label">Email Address</label>
+                    <input name="email" type="email" defaultValue={editingSupplier?.email} required className={INPUT_STYLE} placeholder="vendor@company.com" />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="section-label">Business Address</label>
+                    <textarea name="address" defaultValue={editingSupplier?.address} required rows={2} className={INPUT_STYLE + " resize-none"} placeholder="Street, City, Province" />
+                  </div>
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button type="button" onClick={closeSupplierModal} className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-colors text-zinc-400 hover:text-white" style={{ border: '1px solid var(--border)', background: 'transparent' }}
+                    onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--surface-3)'}
+                    onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white glow-btn" style={{ background: 'linear-gradient(135deg, #7c3aed, #6d28d9)', boxShadow: '0 4px 20px rgba(124,58,237,0.3)' }}>
+                    {editingSupplier ? "Save Changes" : "Register Supplier"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+
+        {/* ── Stock Log / Restock Request Modal ── */}
+        {isRequestModalOpen && (
+          <div className="modal-backdrop">
+            <div className="modal-panel" style={{ maxWidth: '460px' }}>
+              <div className="px-6 py-5 flex justify-between items-center" style={{ borderBottom: '1px solid var(--border)' }}>
+                <div>
+                  <h2 className="font-display font-bold text-white text-lg">
+                    {selectedSupplierId
+                      ? `Restock from ${suppliers.find(s => s.id === selectedSupplierId)?.supplier_name}`
+                      : "Log Incoming Stock"}
+                  </h2>
+                  <p className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
+                    {selectedSupplierId ? "Request products from this supplier" : "Record a new stock delivery"}
+                  </p>
+                </div>
+                <button
+                  onClick={() => { setIsRequestModalOpen(false); setSelectedSupplierId(""); setRestockSuccess(false); }}
+                  className="p-2 rounded-lg transition-colors text-zinc-500 hover:text-white hover:bg-white/5"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {restockSuccess ? (
+                <div className="success-check">
+                  <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)' }}>
+                    <CheckCircle2 size={28} className="text-green-400" />
+                  </div>
+                  <p className="font-display font-bold text-white">Restock Logged!</p>
+                  <p className="text-sm text-center" style={{ color: 'var(--text-3)' }}>Stock entry has been recorded successfully.</p>
+                </div>
+              ) : (
+                <form onSubmit={handleRequestSubmit} className="p-6 space-y-4">
+                  <div>
+                    <label className="section-label">Vendor</label>
+                    <div className="relative mt-1">
+                      <select
+                        required
+                        value={selectedSupplierId}
+                        onChange={(e) => setSelectedSupplierId(e.target.value)}
+                        className={SELECT_STYLE}
+                        style={{ paddingRight: '36px' }}
+                      >
+                        <option value="">Select vendor...</option>
+                        {suppliers.map((s) => (
+                          <option key={s.id} value={s.id}>{s.supplier_name}</option>
+                        ))}
+                      </select>
+                      <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--text-3)', marginTop: '4px' }} />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="section-label">Product</label>
+                    <div className="relative mt-1">
+                      <select
+                        name="product_id"
+                        required
+                        disabled={!selectedSupplierId}
+                        className={SELECT_STYLE}
+                        style={{ paddingRight: '36px', opacity: !selectedSupplierId ? 0.4 : 1, cursor: !selectedSupplierId ? 'not-allowed' : 'pointer' }}
+                      >
+                        <option value="">
+                          {!selectedSupplierId ? "Select a vendor first…" : "Choose product…"}
+                        </option>
+                        {products
+                          .filter((p) => p.supplier_id === selectedSupplierId)
+                          .map((p) => (
+                            <option key={p.id} value={p.id}>{p.product_name}</option>
+                          ))}
+                      </select>
+                      <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'var(--text-3)', marginTop: '4px' }} />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="section-label">Unit Price</label>
+                      <div className="relative mt-1">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold" style={{ color: 'var(--text-3)', marginTop: '4px' }}>₱</span>
+                        <input name="purchase_price" type="number" step="0.01" required
+                          className={INPUT_STYLE} style={{ paddingLeft: '28px' }} placeholder="0.00" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="section-label">Qty Requested</label>
+                      <input name="quantity" type="number" min="1" required className={INPUT_STYLE} style={{ marginTop: '4px' }} placeholder="1" />
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl p-3 flex gap-2" style={{ background: 'rgba(124,58,237,0.06)', border: '1px solid var(--accent-border)' }}>
+                    <ShoppingCart size={14} style={{ color: '#a78bfa', flexShrink: 0, marginTop: '1px' }} />
+                    <p className="text-xs" style={{ color: '#a78bfa' }}>
+                      This will be logged in product resources as an incoming delivery.
+                    </p>
+                  </div>
+
+                  <div className="flex gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => { setIsRequestModalOpen(false); setSelectedSupplierId(""); }}
+                      className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-colors text-zinc-400 hover:text-white"
+                      style={{ border: '1px solid var(--border)', background: 'transparent' }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white flex items-center justify-center gap-2 glow-btn"
+                      style={{ background: 'linear-gradient(135deg, #7c3aed, #6d28d9)', boxShadow: '0 4px 20px rgba(124,58,237,0.3)' }}
+                    >
+                      <Send size={14} />
+                      Confirm Restock
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+};
+
+export default Suppliers;
